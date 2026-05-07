@@ -1,160 +1,147 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, ShieldAlert, Activity, Search, Filter, PlayCircle, CheckCircle, XCircle } from 'lucide-react';
+import { supabase } from './supabaseClient';
+import Login from './Login';
+import CandidateHome from './CandidateHome';
+import AdminDashboard from './AdminDashboard';
 
 export default function App() {
+  const [view, setView] = useState('candidate'); // 'candidate' | 'admin'
+  const [session, setSession] = useState(null);
+  const [role, setRole] = useState(null);
   const [candidates, setCandidates] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Mock fetch from backend
-    setCandidates([
-      { id: 'c1', name: 'Ramesh K.', trade: 'Electrician', district: 'Bengaluru Urban', classification: 'Job Ready', score: 85, status: 'pending', fraudScore: 5 },
-      { id: 'c2', name: 'Suresh P.', trade: 'Plumber', district: 'Mysuru', classification: 'Needs Training', score: 45, status: 'pending', fraudScore: 12 },
-      { id: 'c3', name: 'Unknown User', trade: 'Welder', district: 'Tumakuru', classification: 'Suspected Fraud', score: 10, status: 'flagged', fraudScore: 95 }
-    ]);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) fetchRole(session.user.id);
+      else setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        setLoading(true);
+        setSession(session);
+        fetchRole(session.user.id);
+      } else {
+        setSession(null);
+        setRole(null);
+        setLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  const getStatusColor = (classification) => {
-    switch(classification) {
-      case 'Job Ready': return 'text-green-400 bg-green-400/10 border-green-400/20';
-      case 'Needs Training': return 'text-yellow-400 bg-yellow-400/10 border-yellow-400/20';
-      case 'Suspected Fraud': return 'text-red-400 bg-red-400/10 border-red-400/20';
-      default: return 'text-slate-400 bg-slate-400/10 border-slate-400/20';
+  const fetchRole = async (userId) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', userId)
+        .single();
+        
+      if (data) {
+        setRole(data.role);
+      } else {
+        setRole('candidate'); // default if not found
+      }
+    } catch (err) {
+      console.error("Error fetching role", err);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  useEffect(() => {
+    if (session && role === 'admin') {
+      fetchRealCandidates();
+    }
+  }, [session, role]);
+
+  const fetchRealCandidates = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('*')
+        .order('created_at', { ascending: false });
+        
+      if (data) {
+        setCandidates(data.map(c => ({
+          id: c.id,
+          name: c.full_name || 'Unknown',
+          trade: c.skill || 'Unspecified',
+          district: c.district || 'Unspecified',
+          classification: c.classification || 'Pending Review',
+          score: c.score || 0,
+          status: c.status || 'pending',
+          fraudScore: c.fraud_score || 0
+        })));
+      }
+    } catch (err) {
+      console.error("Error fetching candidates:", err);
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setView('candidate');
+  };
+
+  // Public Candidate Flow (No Auth Required)
+  if (view === 'candidate') {
+    return <CandidateHome onNavigateToAdmin={() => setView('admin')} />;
   }
 
-  return (
-    <div className="flex h-screen bg-slate-900 text-slate-200 font-sans">
-      {/* Sidebar */}
-      <div className="w-64 bg-slate-800 border-r border-slate-700 p-4">
-        <div className="flex items-center gap-3 mb-10 px-2">
-          <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center">
-            <Activity size={18} className="text-white" />
-          </div>
-          <h1 className="text-xl font-bold text-white">AI SkillFit</h1>
-        </div>
+  // Protected Admin Flow
+  if (loading) {
+    return <div className="flex h-screen bg-slate-900 items-center justify-center text-white">Loading...</div>;
+  }
+
+  if (!session) {
+    return (
+      <div className="relative">
+        <button 
+          onClick={() => setView('candidate')}
+          className="absolute top-4 left-4 z-50 text-slate-400 hover:text-white flex items-center gap-2"
+        >
+          ← Back to App
+        </button>
+        <Login onLogin={setSession} />
+      </div>
+    );
+  }
+
+  if (role !== 'admin') {
+    return (
+      <div className="flex flex-col h-screen bg-slate-900 items-center justify-center text-white p-8">
+        <h2 className="text-2xl font-bold text-red-500 mb-2">Access Denied</h2>
+        <p className="text-slate-400 mb-6 text-center max-w-md">
+          You are successfully logged in, but your account does not have the "admin" role in the database.
+        </p>
         
-        <nav className="space-y-2">
-          <NavItem icon={<LayoutDashboard size={20} />} label="Dashboard" active />
-          <NavItem icon={<Users size={20} />} label="Candidates" />
-          <NavItem icon={<ShieldAlert size={20} />} label="Fraud Alerts" badge="3" />
-        </nav>
+        <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 w-full max-w-md mb-8 shadow-xl">
+          <p className="text-sm font-bold text-slate-300 mb-2">Your Current User ID:</p>
+          <code className="block bg-[#0f172a] p-3 rounded text-blue-400 text-sm break-all font-mono select-all">
+            {session.user.id}
+          </code>
+          <p className="text-xs text-slate-500 mt-4 leading-relaxed">
+            To fix this, run this query in your Supabase SQL Editor:<br/><br/>
+            <span className="text-green-400 font-mono">
+              INSERT INTO profiles (id, role) VALUES ('{session.user.id}', 'admin');
+            </span>
+          </p>
+        </div>
+
+        <button 
+          onClick={handleLogout}
+          className="px-6 py-3 bg-blue-600 hover:bg-blue-500 rounded-lg font-bold shadow-lg shadow-blue-500/20"
+        >
+          Sign Out & Return Home
+        </button>
       </div>
+    );
+  }
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
-        <header className="h-16 border-b border-slate-700 bg-slate-800/50 flex items-center justify-between px-8">
-          <h2 className="text-lg font-semibold text-white">Candidate Review</h2>
-          <div className="flex items-center gap-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-              <input 
-                type="text" 
-                placeholder="Search candidates..." 
-                className="bg-slate-900 border border-slate-700 rounded-full pl-10 pr-4 py-1.5 text-sm focus:outline-none focus:border-blue-500 w-64"
-              />
-            </div>
-            <button className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-full border border-slate-700">
-              <Filter size={16} />
-            </button>
-          </div>
-        </header>
-
-        {/* Content */}
-        <main className="flex-1 overflow-auto p-8">
-          {/* Stats */}
-          <div className="grid grid-cols-4 gap-6 mb-8">
-            <StatCard label="Total Candidates" value="1,248" trend="+12%" />
-            <StatCard label="Job Ready" value="842" color="text-green-400" />
-            <StatCard label="Needs Training" value="315" color="text-yellow-400" />
-            <StatCard label="Fraud Flagged" value="91" color="text-red-400" />
-          </div>
-
-          {/* Table */}
-          <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-700 text-slate-400 text-sm uppercase tracking-wider">
-                  <th className="p-4 font-medium">Candidate</th>
-                  <th className="p-4 font-medium">Trade & Location</th>
-                  <th className="p-4 font-medium">AI Classification</th>
-                  <th className="p-4 font-medium">Scores</th>
-                  <th className="p-4 font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-700/50">
-                {candidates.map(c => (
-                  <tr key={c.id} className="hover:bg-slate-700/30 transition-colors">
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center relative overflow-hidden group cursor-pointer">
-                            <PlayCircle size={20} className="text-white opacity-0 group-hover:opacity-100 absolute z-10 transition-opacity" />
-                            <div className="w-full h-full bg-slate-600 group-hover:opacity-50 transition-opacity" />
-                        </div>
-                        <div>
-                          <div className="font-medium text-white">{c.name}</div>
-                          <div className="text-xs text-slate-500">ID: {c.id}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <div className="text-sm text-slate-300">{c.trade}</div>
-                      <div className="text-xs text-slate-500">{c.district}</div>
-                    </td>
-                    <td className="p-4">
-                      <span className={`px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(c.classification)}`}>
-                        {c.classification}
-                      </span>
-                    </td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-4 text-sm">
-                        <div>
-                          <div className="text-slate-500 text-xs">Overall</div>
-                          <div className={c.score > 70 ? 'text-green-400' : 'text-yellow-400'}>{c.score}%</div>
-                        </div>
-                        <div>
-                          <div className="text-slate-500 text-xs">Fraud Risk</div>
-                          <div className={c.fraudScore > 50 ? 'text-red-400' : 'text-slate-300'}>{c.fraudScore}%</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <div className="flex gap-2">
-                        <button className="p-1.5 text-green-400 hover:bg-green-400/10 rounded transition-colors" title="Approve">
-                          <CheckCircle size={18} />
-                        </button>
-                        <button className="p-1.5 text-red-400 hover:bg-red-400/10 rounded transition-colors" title="Reject">
-                          <XCircle size={18} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </main>
-      </div>
-    </div>
-  );
+  return <AdminDashboard session={session} candidates={candidates} handleLogout={handleLogout} />;
 }
-
-const NavItem = ({ icon, label, active, badge }) => (
-  <a href="#" className={`flex items-center justify-between px-4 py-2.5 rounded-lg transition-colors ${active ? 'bg-blue-500/10 text-blue-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}>
-    <div className="flex items-center gap-3">
-      {icon}
-      <span className="font-medium text-sm">{label}</span>
-    </div>
-    {badge && <span className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{badge}</span>}
-  </a>
-);
-
-const StatCard = ({ label, value, trend, color = "text-white" }) => (
-  <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-    <div className="text-slate-400 text-sm mb-2">{label}</div>
-    <div className="flex items-end justify-between">
-      <div className={`text-3xl font-bold ${color}`}>{value}</div>
-      {trend && <div className="text-green-400 text-sm font-medium">{trend}</div>}
-    </div>
-  </div>
-);
