@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+supabase
+pydantic
+python-dotenv
+openai
+python-multipart
+opencv-python-headless
+numpy
